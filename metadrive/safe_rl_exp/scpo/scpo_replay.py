@@ -5,7 +5,6 @@ os.environ['MESA_GLSL_VERSION_OVERRIDE'] = '330'
 import numpy as np
 import torch
 from torch.optim import Adam
-import gym
 import time
 from utils.logx import EpochLogger, setup_logger_kwargs, colorize
  
@@ -26,13 +25,13 @@ def create_env():
     return env
 
 
-def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
+def replay(env_fn, model_path=None, max_epoch=1):
     if not model_path:
         print("please specify a model path")
         raise NotImplementedError
-    if not video_name:
-        print("please specify a video name")
-        raise NotImplementedError    
+    # if not video_name:
+    #     print("please specify a video name")
+    #     raise NotImplementedError    
     
     # Instantiate environment
     env = env_fn()
@@ -146,10 +145,9 @@ def replay(env_fn, model_path=None, video_name=None, max_epoch=1):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
-    parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
     parser.add_argument('--max_epoch', type=int, default=1)  # the maximum number of epochs
     parser.add_argument('--model_path', type=str, default=None)
-    parser.add_argument('--video_name', type=str, default=None)
+    # parser.add_argument('--video_name', type=str, default=None)
     args = parser.parse_args()
 
-    replay(lambda : create_env(), model_path=args.model_path, video_name=args.video_name, max_epoch=args.max_epoch)
+    replay(lambda : create_env(), model_path=args.model_path, max_epoch=args.max_epoch)
