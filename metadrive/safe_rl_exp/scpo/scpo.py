@@ -7,6 +7,8 @@ from torch.optim import Adam
 from metadrive.envs.safe_metadrive_env import SafeMetaDriveEnv
 import gymnasium as gym
 from metadrive.envs.gym_wrapper import createGymWrapper # import the wrapper
+from metadrive.component.map.base_map import BaseMap
+from metadrive.component.map.pg_map import MapGenerateMethod
 
 import time
 import copy
@@ -476,7 +478,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             approx_b = Hx(Hinv_b)
             s = Hinv_b.T @ Hx(Hinv_b)        # b^T H^{-1} b
             A = q - r**2 / s            # should be always positive (Cauchy-Shwarz)
-            B = 2*target_kl - c**2 / s  # does safety boundary intersect trust region? (positive = yes)
+            B = 2*target_kl - c**2 / s  # does `safe`ty boundary intersect trust region? (positive = yes)
             print("g approximation error ", np.linalg.norm(approx_g - g))
             print("b approximation error ", np.linalg.norm(approx_b - b))
 
@@ -730,8 +732,39 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 
         
 def create_env():
-    env = createGymWrapper(SafeMetaDriveEnv)(config={"use_render": False}) # wrap the environment
+    map_config = {
+        BaseMap.GENERATE_TYPE: MapGenerateMethod.BIG_BLOCK_SEQUENCE,
+        BaseMap.GENERATE_CONFIG: "X",  # 3 block
+        BaseMap.LANE_WIDTH: 3.5,
+        BaseMap.LANE_NUM: 2,
+    }
+    map_config["config"] = "X"
+
+    lidar=dict(
+        num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
+    )
+    vehicle_config = dict(lidar=lidar)
+
+    # env = SafeMetaDriveEnv(dict(map_config = map_config))
+    env = createGymWrapper(SafeMetaDriveEnv)(
+        config={
+            "use_render": False,
+            "map_config": map_config,
+            "vehicle_config": vehicle_config,
+            "num_scenarios": 1,
+            "accident_prob": 0.8,
+            "start_seed": 100,
+            "crash_vehicle_done": False,
+            "crash_object_done": False,
+            "out_of_route_done": False,
+            "cost_to_reward": False,
+            "crash_vehicle_penalty": 0.0,
+            "crash_object_penalty": 0.0,
+            "traffic_density": 0.55,
+        }
+    )  # wrap the environment
     return env
+
 
 def parse_float_list(s):
     return [float(item) for item in s.split(',')]
@@ -749,7 +782,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--steps', type=int, default=30000)
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=1500)
     parser.add_argument('--exp_name', type=str, default='scpo_fixed')
     parser.add_argument('--model_save', action='store_true')
     args = parser.parse_args()
