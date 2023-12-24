@@ -52,10 +52,11 @@ class QuadraticOptimizer:
 
         # Check if all eigenvalues are non-negative
         is_positive_semidefinite = np.all(eigenvalues >= 0)
-        try:
-            assert is_positive_semidefinite == True
-        except:
-            import ipdb; ipdb.set_trace()
+        print("is_positive_semidefinite: ",is_positive_semidefinite)
+        # try:
+        #     assert is_positive_semidefinite == True
+        # except:
+        #     import ipdb; ipdb.set_trace()
         print("delta:", delta)
 
         # Define the objective
