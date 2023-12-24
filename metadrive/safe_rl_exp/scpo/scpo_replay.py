@@ -9,6 +9,10 @@ import time
 from utils.logx import EpochLogger, setup_logger_kwargs, colorize
  
 from metadrive.envs.safe_metadrive_env import SafeMetaDriveEnv
+from metadrive.envs.gym_wrapper import createGymWrapper # import the wrapper
+from metadrive.component.map.base_map import BaseMap
+from metadrive.component.map.pg_map import MapGenerateMethod
+
 import gymnasium as gym
 from metadrive.envs.gym_wrapper import createGymWrapper # import the wrapper
 
@@ -21,7 +25,37 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def create_env():
-    env = createGymWrapper(SafeMetaDriveEnv)(config={"use_render": True}) # wrap the environment
+    map_config = {
+        BaseMap.GENERATE_TYPE: MapGenerateMethod.BIG_BLOCK_SEQUENCE,
+        BaseMap.GENERATE_CONFIG: "X",  # 3 block
+        BaseMap.LANE_WIDTH: 3.5,
+        BaseMap.LANE_NUM: 2,
+    }
+    map_config["config"] = "X"
+
+    lidar=dict(
+        num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
+    )
+    vehicle_config = dict(lidar=lidar)
+
+    # env = SafeMetaDriveEnv(dict(map_config = map_config))
+    env = createGymWrapper(SafeMetaDriveEnv)(
+        config={
+            "use_render": True,
+            "map_config": map_config,
+            "vehicle_config": vehicle_config,
+            "num_scenarios": 1,
+            "accident_prob": 0.8,
+            "start_seed": 100,
+            "crash_vehicle_done": False,
+            "crash_object_done": False,
+            "out_of_route_done": False,
+            "cost_to_reward": False,
+            "crash_vehicle_penalty": 0.0,
+            "crash_object_penalty": 0.0,
+            "traffic_density": 0.55,
+        }
+    )  # wrap the environment
     return env
 
 
@@ -46,7 +80,7 @@ def replay(env_fn, model_path=None, max_epoch=1):
     o_aug = np.append(o, M) # augmented observation = observation + M 
     first_step = True
     
-    video_array = []
+    # video_array = []
     
     # load the model 
     ac = torch.load(model_path)
@@ -114,8 +148,8 @@ def replay(env_fn, model_path=None, max_epoch=1):
         # o = next_o
         o_aug = np.append(next_o, M_next)
 
-        img_array = env.render(mode='rgb_array')
-        video_array.append(img_array)
+        # img_array = env.render(mode='rgb_array')
+        # video_array.append(img_array)
 
         ep_ret += r
 
