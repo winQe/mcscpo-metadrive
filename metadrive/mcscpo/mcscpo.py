@@ -3,6 +3,7 @@ os.sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..
 import numpy as np
 import torch
 from torch.optim import Adam
+from scipy.sparse.linalg import LinearOperator, cg as scipy_cg
 
 from metadrive.envs.safe_metadrive_env import SafeMetaDriveEnv
 import gymnasium as gym
@@ -12,7 +13,6 @@ from metadrive.component.map.pg_map import MapGenerateMethod
 
 import time
 import copy
-import random
 import mcscpo_core as core
 import qp_solver as solver
 
@@ -152,64 +152,47 @@ def assign_net_param_from_flat(param_vec, net):
         param.data.copy_(torch.from_numpy(param_vec[ptr:ptr+s]).reshape(param.shape))
         ptr += s
 
-def cg(Ax, b, cg_iters=1000):
-    x = np.zeros_like(b)
-    r = b.copy() # Note: should be 'b - Ax', but for x=0, Ax=0. Change if doing warm start.
-    p = r.copy()
-    r_dot_old = np.dot(r,r.T)
+def cg(Ax, b, x=None, cg_iters=1000, tol=1e-10):
+    """
+    A custom conjugate gradient solver that matches the provided interface.
 
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings('error', category=RuntimeWarning)
+    Parameters:
+    - Ax: The function that computes the matrix-vector product Ax.
+    - b: The right-hand side vector of the equation Ax = b.
+    - x: Initial guess for the solution (default is a zero vector).
+    - cg_iters: Maximum number of iterations.
+    - tol: Tolerance for convergence.
 
-            for _ in range(cg_iters):
-                z = Ax(p)
-                alpha_denom = np.dot(p, z) + EPS
-                if np.abs(alpha_denom) < EPS:  # Avoid division by a very small number
-                    break
-                alpha = r_dot_old / alpha_denom
-                x += alpha * p
-                r -= alpha * z
-                r_dot_new = np.dot(r,r.T)
-                p = r + (r_dot_new / (r_dot_old + EPS)) * p
-                r_dot_old = r_dot_new
-                # early stopping 
-                if np.linalg.norm(r) < EPS:
-                    break
+    Returns:
+    - x: The computed solution.
+    """
+    if x is None:
+        x = np.zeros_like(b)
 
-    except RuntimeWarning as e:
-        import ipdb; ipdb.set_trace()
+    # Define the linear operator using the provided Ax function
+    n = len(b)
+    A_linop = LinearOperator((n, n), matvec=Ax)
+
+    # Use SciPy's conjugate gradient solver
+    x, info = scipy_cg(A=A_linop, b=b, x0=x, tol=tol, maxiter=cg_iters)
+
+    # Handle the termination status
+    if info > 0:
+        print(f"Convergence not achieved after {info} iterations.")
+    elif info < 0:
+        print("Illegal input or breakdown.")
+
     return x
 
-def auto_grad(objectives, net, to_numpy=True):
+def auto_grad(objective, net, to_numpy=True):
     """
-    Get the gradient of the objectives with respect to the parameters of the network.
+    Get the gradient of the objective with respect to the parameters of the network
     """
-    # Ensure objectives is an iterable
-    if not isinstance(objectives, (list, tuple)):
-        objectives = [objectives]
-
-    gradients = []
-    for obj in objectives:
-        # If the objective is not scalar, loop over its components
-        if obj.numel() > 1:
-            grad_components = []
-            for i in range(obj.numel()):
-                grad_component = torch.autograd.grad(obj[i], net.parameters(), retain_graph=True)
-                grad_flat = torch.cat([val.flatten() for val in grad_component], axis=0)
-                if to_numpy:
-                    grad_flat = grad_flat.detach().cpu().numpy()
-                grad_components.append(grad_flat)
-            gradients.append(grad_components)
-        else:
-            grad = torch.autograd.grad(obj, net.parameters(), create_graph=True)
-            grad_flat = torch.cat([val.flatten() for val in grad], axis=0)
-            if to_numpy:
-                grad_flat = grad_flat.detach().cpu().numpy()
-            gradients.append(grad_flat)
-    if len(gradients) == 1:
-        return gradients[0]
-    return gradients
+    grad = torch.autograd.grad(objective, net.parameters(), create_graph=True)
+    if to_numpy:
+        return torch.cat([val.flatten() for val in grad], axis=0).detach().cpu().numpy()
+    else:
+        return torch.cat([val.flatten() for val in grad], axis=0)
 
 
 def auto_hession_x(objective, net, x):
@@ -492,7 +475,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
         # linearize the loss objective and cost function
         g = auto_grad(loss_pi, ac.pi) # get the loss flatten gradient evaluted at pi old 
-        B = np.array(auto_grad(surr_cost, ac.pi)) # get the cost increase flatten gradient evaluted at pi old
+        B = np.array([auto_grad(cost_elem, ac.pi) for cost_elem in surr_cost]) # get the cost increase flatten gradient evaluted at pi old
         # get the Episode cost
         EpMaxCost = np.array(logger.get_value('EpMaxCost')) #EpMaxCost = M, different compared to EpCost
         # cost constraint linearization
