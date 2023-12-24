@@ -12,7 +12,7 @@ class QuadraticOptimizer:
         self.model.I = RangeSet(self.m)
         
         # Define variables
-        self.model.lambda_var = Var(domain=NonNegativeReals,initialize=0.5)
+        self.model.lambda_var = Var(domain=NonNegativeReals,initialize=1.0)
         self.model.nu = Var(self.model.I, domain=NonNegativeReals,initialize=0.001)
 
         # Define parameters
@@ -43,7 +43,19 @@ class QuadraticOptimizer:
         print("C:", C, "Shape:", np.shape(C))
         print("q:", q)
         print("r:", r, "Shape:", np.shape(r))
+
+        # Not positive semidefinite
         print("S:", S, "Shape:", np.shape(S))
+
+        # Compute the eigenvalues of S
+        eigenvalues = np.linalg.eigvals(S)
+
+        # Check if all eigenvalues are non-negative
+        is_positive_semidefinite = np.all(eigenvalues >= 0)
+        try:
+            assert is_positive_semidefinite == True
+        except:
+            import ipdb; ipdb.set_trace()
         print("delta:", delta)
 
         # Define the objective
@@ -61,7 +73,10 @@ class QuadraticOptimizer:
         solver = SolverFactory('ipopt')
         # solver.options["tol"] = 1e-4  # Set a tighter tolerance
         solver.options["max_iter"] = 10000  # Increase the maximum number of iterations
-        results = solver.solve(instance, tee=True)
+        try:
+            results = solver.solve(instance, tee=True)
+        except:
+            import ipdb; ipdb.set_trace()
 
         # Check for infeasibility
         if results.solver.status == 'ok' and results.solver.termination_condition == 'optimal':

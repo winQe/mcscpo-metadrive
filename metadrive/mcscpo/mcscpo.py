@@ -3,16 +3,25 @@ os.sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..
 import numpy as np
 import torch
 from torch.optim import Adam
-import gym
+
+from metadrive.envs.safe_metadrive_env import SafeMetaDriveEnv
+import gymnasium as gym
+from metadrive.envs.gym_wrapper import createGymWrapper # import the wrapper
+from metadrive.component.map.base_map import BaseMap
+from metadrive.component.map.pg_map import MapGenerateMethod
+
 import time
 import copy
+import random
 import mcscpo_core as core
 import qp_solver as solver
+
 from utils.logx import EpochLogger, setup_logger_kwargs, colorize
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs, mpi_sum
-from utils.safe_rl_env_config import configuration
+
 import os.path as osp
+import warnings
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPS = 1e-8
@@ -143,22 +152,33 @@ def assign_net_param_from_flat(param_vec, net):
         param.data.copy_(torch.from_numpy(param_vec[ptr:ptr+s]).reshape(param.shape))
         ptr += s
 
-def cg(Ax, b, cg_iters=2500):
+def cg(Ax, b, cg_iters=1000):
     x = np.zeros_like(b)
     r = b.copy() # Note: should be 'b - Ax', but for x=0, Ax=0. Change if doing warm start.
     p = r.copy()
     r_dot_old = np.dot(r,r.T)
-    for _ in range(cg_iters):
-        z = Ax(p)
-        alpha = r_dot_old / (np.dot(p, z) + EPS)
-        x += alpha * p
-        r -= alpha * z
-        r_dot_new = np.dot(r,r.T)
-        p = r + (r_dot_new / r_dot_old) * p
-        r_dot_old = r_dot_new
-        # early stopping 
-        if np.linalg.norm(p) < EPS:
-            break
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error', category=RuntimeWarning)
+
+            for _ in range(cg_iters):
+                z = Ax(p)
+                alpha_denom = np.dot(p, z) + EPS
+                if np.abs(alpha_denom) < EPS:  # Avoid division by a very small number
+                    break
+                alpha = r_dot_old / alpha_denom
+                x += alpha * p
+                r -= alpha * z
+                r_dot_new = np.dot(r,r.T)
+                p = r + (r_dot_new / (r_dot_old + EPS)) * p
+                r_dot_old = r_dot_new
+                # early stopping 
+                if np.linalg.norm(r) < EPS:
+                    break
+
+    except RuntimeWarning as e:
+        import ipdb; ipdb.set_trace()
     return x
 
 def auto_grad(objectives, net, to_numpy=True):
@@ -204,7 +224,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, pi_lr=3e-4,
         vf_lr=1e-3, vcf_lr=1e-3, train_v_iters=80, train_vc_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, target_cost = 0.0, logger_kwargs=dict(), save_freq=10, backtrack_coeff=0.8, 
-        backtrack_iters=100, model_save=True, cost_reduction=0, num_constraints=2):
+        backtrack_iters=100, model_save=True, cost_reduction=0, num_constraints=3):
     """
     State-wise Constrained Policy Optimization, 
  
@@ -497,16 +517,18 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # q = g.T * H^-1 * g
         q        = Hinv_g.T @ approx_g
 
-        Hinv_B = np.array([cg(Hx, b) for b in B])
+        Hinv_B = np.array([cg(Hx, b) for b in B]) # std is a bit too much here
         approx_B = np.array([Hx(Hinv_b) for Hinv_b in Hinv_B])
 
-        # # # Assuming Hx, B, Hinv_B, and approx_B are already defined
-        # # is_correct = verify_cg(Hx, B, Hinv_B, approx_B)
-        # # print("Implementation is correct:" if is_correct else "Implementation might be incorrect.")
+        # Assuming Hx, B, Hinv_B, and approx_B are already defined
         r = Hinv_B @ approx_g          # b^T H^{-1} g
         S =  approx_B @ Hinv_B.T      # b^T H^{-1} b
 
         # Start timing
+        print("g approximation error ", np.linalg.norm(approx_g - g))
+        for i in range(len(B)):
+            print("b{} approximation error ".format(i), np.linalg.norm(approx_B[i] - B[i]))
+
         solver_start = time.time()
 
         # Use QP library to solve the QP
@@ -532,8 +554,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         else:
             x_direction = (1./(lam+EPS)) * (Hinv_g + nu @ Hinv_B)
             logger.store(Infeasible=0)
- 
-        
+               
         # Stop timing
         solver_end = time.time()
 
@@ -644,7 +665,26 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a, v, vcs, logp, mu, logstd = ac.step(torch.as_tensor(o_aug, dtype=torch.float32))
             
             try: 
-                next_o, r, d, info = env.step(a)
+                next_o, r, d, i = env.step(a)
+                info = dict()
+                info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
+                info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
+                info['crash_object_cost'] = i.get('crash_object_cost', 0)
+                info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                # info['cost_env'] =  i.get('cost', 0)
+                # # info['cost_crash_vehicle'] = i.get('crash_vehicle_cost', 0)
+                # # info['crash_object_cost'] = i.get('crash_object_cost', 0)
+                # info['cost_acceleration']  = 0.5 if abs(i['acceleration']) > 0.4 else 0
+                # info['cost_steer']  = 0.25 if abs(i['steering']) > 0.2 else 0
+                # # random_number = random.randint(1, 1000)
+
+                # # if random_number <= 57:
+                # #     info['crash_vehicle_cost'] = 0.5
+                # # elif random_number <= 91:
+                # #     info['crash_object_cost'] =  0.32
+                # # elif random_number <= 121:
+                # #      info['cost_out_of_road'] = 0.69
+                # info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
                 assert 'cost' in info.keys()
             except: 
                 # simulation exception discovered, discard this episode 
@@ -760,8 +800,38 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.dump_tabular()
         
         
-def create_env(args):
-    env =  safe_rl_envs_Engine(configuration(args.task))
+def create_env():
+    map_config = {
+        BaseMap.GENERATE_TYPE: MapGenerateMethod.BIG_BLOCK_SEQUENCE,
+        BaseMap.GENERATE_CONFIG: "X",  # 3 block
+        BaseMap.LANE_WIDTH: 3.5,
+        BaseMap.LANE_NUM: 2,
+    }
+    map_config["config"] = "X"
+
+    lidar=dict(
+        num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
+    )
+    vehicle_config = dict(lidar=lidar)
+
+    # env = SafeMetaDriveEnv(dict(map_config = map_config))
+    env = createGymWrapper(SafeMetaDriveEnv)(
+        config={
+            "use_render": False,
+            "map_config": map_config,
+            "vehicle_config": vehicle_config,
+            "num_scenarios": 1,
+            "accident_prob": 0.8,
+            "start_seed": 100,
+            "crash_vehicle_done": False,
+            "crash_object_done": False,
+            "out_of_route_done": False,
+            "cost_to_reward": False,
+            "crash_vehicle_penalty": 0.0,
+            "crash_object_penalty": 0.0,
+            "traffic_density": 0.55,
+        }
+    )  # wrap the environment
     return env
 
 def parse_float_list(s):
@@ -771,20 +841,19 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-     
-    parser.add_argument('--target_cost', type=parse_float_list, default=[0.00]) # the array of cost limit for the environment
+    parser.add_argument('--target_cost', type=parse_float_list, default=[0.00,0.00,0.00]) # the array of cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
     parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
+    parser.add_argument('--seed', '-s', type=int, default=1)
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--steps', type=int, default=30000)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--exp_name', type=str, default='solverbased_scpo')
     parser.add_argument('--model_save', action='store_true')
-    parser.add_argument('--num_constraints', type=int, default=1) # Number of constraints
+    parser.add_argument('--num_constraints', type=int, default=3) # Number of constraints
 
     args = parser.parse_args()
 
@@ -799,7 +868,7 @@ if __name__ == '__main__':
     # whether to save model
     model_save = True if args.model_save else False
 
-    scpo(lambda : create_env(args), actor_critic=core.MLPActorCritic,
+    scpo(lambda : create_env(), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
