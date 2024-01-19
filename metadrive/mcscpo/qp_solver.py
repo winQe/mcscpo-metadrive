@@ -1,6 +1,7 @@
 import numpy as np
 from pyomo.environ import (AbstractModel, Var, Objective, Constraint, SolverFactory,Param,
                            minimize, maximize, NonNegativeReals, RangeSet)
+from pyomo.opt import SolverStatus, TerminationCondition
 import unittest
 
 class QuadraticOptimizer:
@@ -12,8 +13,8 @@ class QuadraticOptimizer:
         self.model.I = RangeSet(self.m)
         
         # Define variables
-        self.model.lambda_var = Var(domain=NonNegativeReals,initialize=1.0)
-        self.model.nu = Var(self.model.I, domain=NonNegativeReals,initialize=0.001)
+        self.model.lambda_var = Var(domain=NonNegativeReals,initialize=0.5)
+        self.model.nu = Var(self.model.I, domain=NonNegativeReals,initialize=0.01)
 
         # Define parameters
         self.model.C = Param(self.model.I, mutable=True)
@@ -53,10 +54,10 @@ class QuadraticOptimizer:
         # Check if all eigenvalues are non-negative
         is_positive_semidefinite = np.all(eigenvalues >= 0)
         print("is_positive_semidefinite: ",is_positive_semidefinite)
-        # try:
-        #     assert is_positive_semidefinite == True
-        # except:
-        #     import ipdb; ipdb.set_trace()
+        try:
+            assert is_positive_semidefinite == True
+        except:
+            import ipdb; ipdb.set_trace()
         print("delta:", delta)
 
         # Define the objective
@@ -84,6 +85,9 @@ class QuadraticOptimizer:
             self.status = "Optimal"
         elif results.solver.termination_condition == 'infeasible':
             self.status = "Infeasible"
+        elif results.solver.termination_condition == TerminationCondition.unbounded:
+            import ipdb; ipdb.set_trace()
+
         else:
             self.status = "Solver Status: {}".format(results.solver.status)
 

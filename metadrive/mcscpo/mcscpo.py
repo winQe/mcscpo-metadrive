@@ -152,13 +152,14 @@ def assign_net_param_from_flat(param_vec, net):
         param.data.copy_(torch.from_numpy(param_vec[ptr:ptr+s]).reshape(param.shape))
         ptr += s
 
-def cg(Ax, b, x=None, cg_iters=1000, tol=1e-10):
+def cg(Ax, b, Mx=None, x=None, cg_iters=1000, tol=1e-10):
     """
-    A custom conjugate gradient solver that matches the provided interface.
+    A custom conjugate gradient solver with preconditioning.
 
     Parameters:
-    - Ax: The function that computes the matrix-vector product Ax.
-    - b: The right-hand side vector of the equation Ax = b.
+    - Ax: Function that computes the matrix-vector product Ax.
+    - b: Right-hand side vector of the equation Ax = b.
+    - Mx: Preconditioner function. If None, a Jacobi preconditioner is created.
     - x: Initial guess for the solution (default is a zero vector).
     - cg_iters: Maximum number of iterations.
     - tol: Tolerance for convergence.
@@ -169,14 +170,33 @@ def cg(Ax, b, x=None, cg_iters=1000, tol=1e-10):
     if x is None:
         x = np.zeros_like(b)
 
-    # Define the linear operator using the provided Ax function
     n = len(b)
     A_linop = LinearOperator((n, n), matvec=Ax)
 
-    # Use SciPy's conjugate gradient solver
-    x, info = scipy_cg(A=A_linop, b=b, x0=x, tol=tol, maxiter=cg_iters)
+    # Define the preconditioner as a linear operator
+    if Mx is None:
+        # Estimate the diagonal of the matrix for Jacobi preconditioner
+        diag = np.zeros(n)
+        for i in range(n):
+            e_i = np.zeros(n)
+            e_i[i] = 1
+            A_e_i = Ax(e_i)
+            diag[i] = A_e_i[i]
 
-    # Handle the termination status
+        # Add a small constant to avoid division by zero
+        epsilon = 1e-10
+        diag_safe = diag + epsilon
+
+        # Invert the diagonal for the preconditioner
+        M_inv = 1.0 / diag_safe
+        Mx = lambda x: M_inv * x
+        M_linop = LinearOperator((n, n), matvec=Mx)
+    else:
+        M_linop = LinearOperator((n, n), matvec=Mx)
+
+    # Use SciPy's conjugate gradient solver with preconditioner
+    x, info = scipy_cg(A=A_linop, b=b, x0=x, tol=tol, maxiter=cg_iters, M=M_linop)
+
     if info > 0:
         print(f"Convergence not achieved after {info} iterations.")
     elif info < 0:
@@ -491,7 +511,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         '''
         # if negative means M (maximum statewise cost) cost limit, thus infeasible
         c = np.squeeze(EpMaxCost - np.array(target_cost))
-
+        c = np.atleast_1d(c)
         # core calculation for SCPO
         # # Conjugate Gradient to calculate H^-1
         Hinv_g   = cg(Hx, g)             # Hinv_g = H^-1 * g        
@@ -651,9 +671,9 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 next_o, r, d, i = env.step(a)
                 info = dict()
                 info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
-                info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
-                info['crash_object_cost'] = i.get('crash_object_cost', 0)
-                info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                # info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
+                # info['crash_object_cost'] = i.get('crash_object_cost', 0)
+                info['cost'] = info['cost_out_of_road']# + info['crash_vehicle_cost'] + info['crash_object_cost']
                 # info['cost_env'] =  i.get('cost', 0)
                 # # info['cost_crash_vehicle'] = i.get('crash_vehicle_cost', 0)
                 # # info['crash_object_cost'] = i.get('crash_object_cost', 0)
@@ -824,7 +844,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=parse_float_list, default=[0.00,0.00,0.00]) # the array of cost limit for the environment
+    parser.add_argument('--target_cost', type=parse_float_list, default=[0.0])#[0.00,0.00,0.00]) # the array of cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
@@ -832,11 +852,11 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=1)
     parser.add_argument('--cpu', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=30000)
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--steps', type=int, default=30000)                                       
+    parser.add_argument('--epochs', type=int, default=1500)
     parser.add_argument('--exp_name', type=str, default='solverbased_scpo')
     parser.add_argument('--model_save', action='store_true')
-    parser.add_argument('--num_constraints', type=int, default=3) # Number of constraints
+    parser.add_argument('--num_constraints', type=int, default=1) # Number of constraints
 
     args = parser.parse_args()
 
