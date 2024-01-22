@@ -182,7 +182,7 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, pi_lr=3e-4,
         vf_lr=1e-3, vcf_lr=1e-3, train_v_iters=80, train_vc_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, target_cost = 0.0, logger_kwargs=dict(), save_freq=10, backtrack_coeff=0.8, 
-        backtrack_iters=100, model_save=True, cost_reduction=0):
+        backtrack_iters=100, model_save=True, cost_reduction=0, num_constraint=1):
     """
     State-wise Constrained Policy Optimization, 
  
@@ -615,23 +615,21 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             try: 
                 next_o, r, d, i = env.step(a)
                 info = dict()
+                
+                #Positional cost
                 info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
                 info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
                 info['crash_object_cost'] = i.get('crash_object_cost', 0)
-                info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+
+                if num_constraint == 1:
+                    info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                elif num_constraint == 3:
+                    info['cost_env'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                    info['cost_acceleration']  = 0.5 if abs(i['acceleration']) > 0.4 else 0
+                    info['cost_steer']  = 0.25 if abs(i['steering']) > 0.2 else 0
+                    info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
 
                 assert 'cost' in info.keys()
-                # linear_v = math.hypot(next_o[3],next_o[4])
-                # linear_a = math.hypot(next_o[0],next_o[1])
-                # print("speed: ", math.hypot(next_o[3],next_o[4]), "\tVelocity of the robot: ", (next_o[3],next_o[4],next_o[5]))
-                # print("accel mag: ",math.hypot(next_o[0],next_o[1]),"\tAcceleration of the robot: ",(next_o[0],next_o[1],next_o[2]))
-
-                # max_accel = 5
-                # cost_accel = (linear_a - max_accel) / linear_a if linear_a > max_accel else 0
-
-                # #Increment the cost in info
-                # info['cost_accel'] = cost_accel
-                # info['cost'] += cost_accel
             except: 
                 # simulation exception discovered, discard this episode 
                 next_o, r, d = o, 0, True # observation will not change, no reward when episode done 
@@ -785,12 +783,14 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=1500)
     parser.add_argument('--exp_name', type=str, default='scpo_fixed')
     parser.add_argument('--model_save', action='store_true')
+    parser.add_argument('--num_constraint', type=int, default=1)
+
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
     
     exp_name = args.exp_name + '_' + args.map_type \
-                + '_' + 'constraints' + str(args.target_cost) \
+                + '_' + 'constraints' + str(args.num_constraint) \
                 + '_' + 'epoch' + str(args.epochs)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
 
@@ -801,4 +801,5 @@ if __name__ == '__main__':
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction)
+        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction,
+        num_constraint=args.num_constraint)
