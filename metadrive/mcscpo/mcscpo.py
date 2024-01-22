@@ -670,24 +670,20 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             try: 
                 next_o, r, d, i = env.step(a)
                 info = dict()
-                info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
-                # info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
-                # info['crash_object_cost'] = i.get('crash_object_cost', 0)
-                info['cost'] = info['cost_out_of_road']# + info['crash_vehicle_cost'] + info['crash_object_cost']
-                # info['cost_env'] =  i.get('cost', 0)
-                # # info['cost_crash_vehicle'] = i.get('crash_vehicle_cost', 0)
-                # # info['crash_object_cost'] = i.get('crash_object_cost', 0)
-                # info['cost_acceleration']  = 0.5 if abs(i['acceleration']) > 0.4 else 0
-                # info['cost_steer']  = 0.25 if abs(i['steering']) > 0.2 else 0
-                # # random_number = random.randint(1, 1000)
 
-                # # if random_number <= 57:
-                # #     info['crash_vehicle_cost'] = 0.5
-                # # elif random_number <= 91:
-                # #     info['crash_object_cost'] =  0.32
-                # # elif random_number <= 121:
-                # #      info['cost_out_of_road'] = 0.69
-                # info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
+
+                if num_constraints == 1:
+                  #Positional cost
+                    info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
+                    info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
+                    info['crash_object_cost'] = i.get('crash_object_cost', 0)
+                    info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                elif num_constraints == 3:
+                    info['cost_env'] = i.get('cost_out_of_road', 0)+  i.get('crash_vehicle_cost', 0) + i.get('crash_object_cost', 0)
+                    info['cost_acceleration']  = 0.5 if abs(i['acceleration']) > 0.4 else 0
+                    info['cost_steer']  = 0.25 if abs(i['steering']) > 0.2 else 0
+                    info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
+
                 assert 'cost' in info.keys()
             except: 
                 # simulation exception discovered, discard this episode 
@@ -803,15 +799,14 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.dump_tabular()
         
         
-def create_env():
+def create_env(map_type):
     map_config = {
         BaseMap.GENERATE_TYPE: MapGenerateMethod.BIG_BLOCK_SEQUENCE,
         BaseMap.GENERATE_CONFIG: "X",  # 3 block
         BaseMap.LANE_WIDTH: 3.5,
         BaseMap.LANE_NUM: 2,
     }
-    map_config["config"] = "X"
-
+    map_config["config"]= map_type
     lidar=dict(
         num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
     )
@@ -843,8 +838,8 @@ def parse_float_list(s):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
-    parser.add_argument('--task', type=str, default='Goal_Point_8Hazards')
-    parser.add_argument('--target_cost', type=parse_float_list, default=[0.0])#[0.00,0.00,0.00]) # the array of cost limit for the environment
+    parser.add_argument('--map_type', type=str, default='SXCOY')
+    parser.add_argument('--target_cost', type=parse_float_list, default=[0.00,0.00,0.00]) # the array of cost limit for the environment
     parser.add_argument('--target_kl', type=float, default=0.02) # the kl divergence limit for SCPO
     parser.add_argument('--cost_reduction', type=float, default=0.) # the cost_reduction limit when current policy is infeasible
     parser.add_argument('--hid', type=int, default=64)
@@ -862,17 +857,17 @@ if __name__ == '__main__':
 
     mpi_fork(args.cpu)  # run parallel code with mpi
     
-    exp_name = args.task + '_' + args.exp_name \
-                + '_' + 'kl' + str(args.target_kl) \
-                + '_' + 'target_cost' + str(args.target_cost) \
+    exp_name = args.exp_name + '_' + args.map_type \
+                + '_' + 'constraints' + str(args.num_constraints) \
                 + '_' + 'epoch' + str(args.epochs)
     logger_kwargs = setup_logger_kwargs(exp_name, args.seed)
 
     # whether to save model
     model_save = True if args.model_save else False
 
-    scpo(lambda : create_env(), actor_critic=core.MLPActorCritic,
+    scpo(lambda : create_env(args.map_type), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
-        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction, num_constraints= args.num_constraints)
+        model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction,
+        num_constraints=args.num_constraints)
