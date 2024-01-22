@@ -24,14 +24,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 
-def create_env():
+def create_env(map_type):
     map_config = {
         BaseMap.GENERATE_TYPE: MapGenerateMethod.BIG_BLOCK_SEQUENCE,
         BaseMap.GENERATE_CONFIG: "X",  # 3 block
         BaseMap.LANE_WIDTH: 3.5,
         BaseMap.LANE_NUM: 2,
     }
-    map_config["config"] = "X"
+    map_config["config"]= map_type
 
     lidar=dict(
         num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
@@ -181,7 +181,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()    
     parser.add_argument('--max_epoch', type=int, default=1)  # the maximum number of epochs
     parser.add_argument('--model_path', type=str, default=None)
-    # parser.add_argument('--video_name', type=str, default=None)
+    parser.add_argument('--map_type', type=str, default='SXCOY')
+
     args = parser.parse_args()
 
-    replay(lambda : create_env(), model_path=args.model_path, max_epoch=args.max_epoch)
+    replay(lambda : create_env(args.map_type), model_path=args.model_path, max_epoch=args.max_epoch)

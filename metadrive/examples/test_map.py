@@ -20,7 +20,7 @@ if __name__ == "__main__":
         BaseMap.LANE_NUM: 2,
     }
 
-    map_config["config"]="X"
+    map_config["config"]="SXCOY"
 
     env = SafeMetaDriveEnv(dict(map_config = map_config))
     env.reset()
