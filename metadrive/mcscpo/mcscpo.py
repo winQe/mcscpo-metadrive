@@ -808,7 +808,7 @@ def create_env(map_type):
     }
     map_config["config"]= map_type
     lidar=dict(
-        num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
+        num_lasers=50, distance=50, num_others=0, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=False
     )
     vehicle_config = dict(lidar=lidar)
 
