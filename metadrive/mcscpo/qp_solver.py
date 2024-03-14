@@ -22,12 +22,22 @@ class QuadraticOptimizer:
         self.model.r = Param(self.model.I, mutable=True)
         self.model.S = Param(self.model.I, self.model.I, mutable=True)
         self.model.delta = Param(mutable=True)
+        # Define the lambda constraint function
+        def lambda_constraint_rule(mod):
+            return mod.lambda_var >= 0
 
-        
+        # Define the nu constraint function
+        def nu_constraint_rule(mod, i):
+            return mod.nu[i] >= 0
+
+        # Add explicit constraints
+        self.model.lambda_constraint = Constraint(rule=lambda_constraint_rule)
+        self.model.nu_constraint = Constraint(self.model.I, rule=nu_constraint_rule)
+
         # Store solutions
         self.optimal_lambda = None
         self.optimal_nu = None
-
+    
     def solve(self, C, q, r, S, delta):
         # Set parameter values
         instance = self.model.create_instance()
@@ -58,6 +68,8 @@ class QuadraticOptimizer:
             assert is_positive_semidefinite == True
         except:
             import ipdb; ipdb.set_trace()
+            self.status = "Infeasible"
+            return
         print("delta:", delta)
 
         # Define the objective
@@ -85,9 +97,11 @@ class QuadraticOptimizer:
             self.status = "Optimal"
         elif results.solver.termination_condition == 'infeasible':
             self.status = "Infeasible"
+            return
         elif results.solver.termination_condition == TerminationCondition.unbounded:
+            self.status = "Infeasible"
             import ipdb; ipdb.set_trace()
-
+            return
         else:
             self.status = "Solver Status: {}".format(results.solver.status)
 

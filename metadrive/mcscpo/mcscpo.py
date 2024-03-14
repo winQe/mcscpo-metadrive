@@ -152,7 +152,7 @@ def assign_net_param_from_flat(param_vec, net):
         param.data.copy_(torch.from_numpy(param_vec[ptr:ptr+s]).reshape(param.shape))
         ptr += s
 
-def cg(Ax, b, Mx=None, x=None, cg_iters=1000, tol=1e-10):
+def cg(Ax, b, Mx=None, x=None, cg_iters=250, tol=1e-2):
     """
     A custom conjugate gradient solver with preconditioning.
 
@@ -201,6 +201,8 @@ def cg(Ax, b, Mx=None, x=None, cg_iters=1000, tol=1e-10):
         print(f"Convergence not achieved after {info} iterations.")
     elif info < 0:
         print("Illegal input or breakdown.")
+    else:
+        print(f"Convergence achieved.")
 
     return x
 
@@ -222,6 +224,19 @@ def auto_hession_x(objective, net, x):
     jacob = auto_grad(objective, net, to_numpy=False)
     
     return auto_grad(torch.dot(jacob, x), net, to_numpy=True)
+
+def calculate_cost(value):
+    if value < 4:
+        return 0.0
+    elif value <= 20:
+        # Linear increase from 0 at value = 4 to a certain point at value = 20
+        return (value - 4) / (20 - 4) * 0.2  # Adjusted to ensure smooth transition
+    else:
+        # For values above 20, use a function that increases continuously. 
+        # We can use a logarithmic scale adjusted to ensure it fits well within our desired output range.
+        # This example uses a logarithm to ensure uniqueness but it's a simple placeholder for demonstration.
+        # Adjust the base and scaling to fit within the 0.2 to 1.0 range more appropriately.
+        return 0.5 * (0.2 + (np.log(value - 19) / np.log(40 - 19)) * (1.0 - 0.2))
 
 def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, pi_lr=3e-4,
@@ -671,19 +686,17 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 next_o, r, d, i = env.step(a)
                 info = dict()
 
-
-                if num_constraints == 1:
+                if num_constraints == 3:
                   #Positional cost
                     info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
                     info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
                     info['crash_object_cost'] = i.get('crash_object_cost', 0)
                     info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
-                elif num_constraints == 3:
-                    info['cost_env'] = i.get('cost_out_of_road', 0)+  i.get('crash_vehicle_cost', 0) + i.get('crash_object_cost', 0)
-                    info['cost_acceleration']  = 0.5 if abs(i['acceleration']) > 0.4 else 0
-                    info['cost_steer']  = 0.25 if abs(i['steering']) > 0.2 else 0
-                    info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
-
+                elif num_constraints == 20:
+                    info['cost_env'] = i.get('cost_out_of_road', 0) + i.get('crash_vehicle_cost', 0) + i.get('crash_object_cost', 0)
+                    info['cost_acceleration'] = calculate_cost(i['accel_ms'])
+                    info['cost_jerk'] = calculate_cost(i['jerk'])
+                    info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_jerk']
                 assert 'cost' in info.keys()
             except: 
                 # simulation exception discovered, discard this episode 
@@ -870,4 +883,4 @@ if __name__ == '__main__':
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs, target_cost=args.target_cost, 
         model_save=model_save, target_kl=args.target_kl, cost_reduction=args.cost_reduction,
-        num_constraints=args.num_constraints)
+        num_constraints=args.num_constraints, max_ep_len=1000)
