@@ -33,7 +33,7 @@ def create_env():
     map_config["config"] = "X"
 
     lidar=dict(
-        num_lasers=240, distance=50, num_others=4, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=True
+        num_lasers=50, distance=50, num_others=0, gaussian_noise=0.0, dropout_prob=0.0, add_others_navi=False
     )
     vehicle_config = dict(lidar=lidar)
 
@@ -80,8 +80,11 @@ def replay(env_fn, model_path=None, max_epoch=1, num_constraints=1):
     ac = torch.load(model_path)
     get_costs = lambda info, constraints: np.array([info[key] for key in constraints if key != 'cost'])
     constraints_list = []
+    velocity = []
+    velocity_diff = []
 
-    
+    steer = []
+    steer_diff = []
     # evaluate the model 
     while True:
         time_step += 1
@@ -110,9 +113,9 @@ def replay(env_fn, model_path=None, max_epoch=1, num_constraints=1):
             next_o, r, d, i = env.step(a)
             info = dict()
             info['cost_out_of_road'] = i.get('cost_out_of_road', 0)
-            # info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
-            # info['crash_object_cost'] = i.get('crash_object_cost', 0)
-            info['cost'] = info['cost_out_of_road']# + info['crash_vehicle_cost'] + info['crash_object_cost']
+            info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
+            info['crash_object_cost'] = i.get('crash_object_cost', 0)
+            info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
             # info['cost_env'] =  i.get('cost', 0)
             # # info['cost_crash_vehicle'] = i.get('crash_vehicle_cost', 0)
             # # info['crash_object_cost'] = i.get('crash_object_cost', 0)
@@ -127,6 +130,17 @@ def replay(env_fn, model_path=None, max_epoch=1, num_constraints=1):
             # # elif random_number <= 121:
             # #      info['cost_out_of_road'] = 0.69
             # info['cost'] = info['cost_env'] + info['cost_acceleration'] + info['cost_steer']
+            # print("acceleration: " ,i['accel_ms'])
+            # print("jerk: " ,i['jerk'])
+            # print("steering: ", i['steering'])
+            # print("throttle: ",i['acceleration'])
+
+            if(len(velocity) > 0 ):
+                velocity_diff.append(i['velocity'] - velocity[-1])
+                steer_diff.append(abs(i['steering'] - steer[-1]))
+            
+            velocity.append(i['velocity'])
+            steer.append(i['steering'])
             assert 'cost' in info.keys()
         except: 
             # simulation exception discovered, discard this episode 
@@ -153,13 +167,37 @@ def replay(env_fn, model_path=None, max_epoch=1, num_constraints=1):
 
         ep_ret += r
 
+    velocity_max = max(velocity)
+    velocity_avg = sum(velocity) / len(velocity)
+
+    velocity_diff_max = max(velocity_diff)
+    velocity_diff_avg = sum(velocity_diff) / len(velocity_diff)
+
+    steer_max = max(steer)
+    steer_avg = sum(steer) / len(steer)
+
+    steer_diff_max = max(steer_diff)
+    steer_diff_avg = sum(steer_diff)/ len(steer_diff)
+
+    print(f"Max velocity: {velocity_max} # Maximum value in the velocity list")
+    print(f"Average velocity: {velocity_avg:.2f} # Average value of the velocity list")
+
+    print(f"Max velocity difference: {velocity_diff_max} # Maximum value in the velocity difference list")
+    print(f"Average velocity difference: {velocity_diff_avg:.2f} # Average value of the velocity difference list")
+
+    print(f"Max steering angle: {steer_max} # Maximum value in the steer list")
+    print(f"Average steering angle: {steer_avg:.2f} # Average value of the steer list")
+
+    print(f"Max steering angle difference: {steer_diff_max} # Maximum value in the steer difference list")
+    print(f"Average steering angle difference: {steer_diff_avg:.2f} # Average value of the steer difference list")
+
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()    
     parser.add_argument('--max_epoch', type=int, default=1)  # the maximum number of epochs
     parser.add_argument('--model_path', type=str, default=None)
-    parser.add_argument('--num_constraints', type=int, default=1) # Number of constraints
+    parser.add_argument('--num_constraints', type=int, default=3) # Number of constraints
     args = parser.parse_args()
 
     replay(lambda : create_env(), model_path=args.model_path, max_epoch=args.max_epoch, num_constraints=args.num_constraints)
