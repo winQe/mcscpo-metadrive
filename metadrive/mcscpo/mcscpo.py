@@ -678,6 +678,10 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         trajectory_index = 0
+        velocity = []
+        velocity_diff = []
+        steer = [0.0]
+        steer_diff = []
         for t in range(local_steps_per_epoch):
             # Forward, get action and value estimates (cost and reward) for the current observation
             a, v, vcs, logp, mu, logstd = ac.step(torch.as_tensor(o_aug, dtype=torch.float32))
@@ -692,6 +696,20 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     info['crash_vehicle_cost'] = i.get('crash_vehicle_cost', 0)
                     info['crash_object_cost'] = i.get('crash_object_cost', 0)
                     info['cost'] = info['cost_out_of_road'] + info['crash_vehicle_cost'] + info['crash_object_cost']
+                elif num_constraints == 2:
+                    if(not first_step):
+                        velocity_diff.append(i['velocity'] - velocity[-1])
+                        steer_diff.append(abs(i['steering'] - steer[-1]))
+                    else:
+                        steer_diff.append(abs(i['steering'] - 0))
+            
+                    velocity.append(i['velocity'])
+                    steer.append(i['steering'])
+
+                    info['cost_env'] = i.get('cost_out_of_road', 0) + i.get('crash_vehicle_cost', 0) + i.get('crash_object_cost', 0)
+                    info['cost_steer_diff'] = 0.0 if steer_diff[-1] <= 1 else max(steer_diff[-1] - 1.2, 0.0)
+                    info['cost'] = info['cost_env'] + info['cost_steer_diff']
+
                 elif num_constraints == 20:
                     info['cost_env'] = i.get('cost_out_of_road', 0) + i.get('crash_vehicle_cost', 0) + i.get('crash_object_cost', 0)
                     info['cost_acceleration'] = calculate_cost(i['accel_ms'])
@@ -778,6 +796,20 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if ((epoch % save_freq == 0) or (epoch == epochs-1)) and model_save:
             logger.save_state({'env': env}, None)
 
+
+        velocity_max = max(velocity)
+        velocity_avg = sum(velocity) / len(velocity)
+
+        velocity_diff_max = max(velocity_diff)
+        velocity_diff_avg = sum(velocity_diff) / len(velocity_diff)
+
+        steer_max = max(steer)
+        steer_avg = sum(steer) / len(steer)
+
+        steer_diff_max = max(steer_diff)
+        steer_diff_avg = sum(steer_diff)/ len(steer_diff)
+
+
         # Perform SCPO update!
         update()
         
@@ -809,6 +841,15 @@ def scpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
         logger.log_tabular('Infeasible', average_only=True)
         logger.log_tabular('NumberOfTrajectories',trajectory_index)
+        logger.log_tabular('VelocityMax',velocity_max)
+        logger.log_tabular('VelocityAvg',velocity_avg)
+        logger.log_tabular('VelocityDiffMax',velocity_diff_max)
+        logger.log_tabular('VelocityDiffAvg',velocity_diff_avg)
+        logger.log_tabular('SteerMax',steer_max)
+        logger.log_tabular('SteerAvg',steer_avg)
+        logger.log_tabular('SteerDiffMax',steer_diff_max)
+        logger.log_tabular('SteerDiffAvg',steer_diff_avg)
+
         logger.dump_tabular()
         
         
