@@ -90,7 +90,9 @@ class QuadraticOptimizer:
         try:
             results = solver.solve(instance, tee=True)
         except:
-            import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
+            self.status = "Infeasible"
+            return
 
         # Check for infeasibility
         if results.solver.status == 'ok' and results.solver.termination_condition == 'optimal':
@@ -100,7 +102,7 @@ class QuadraticOptimizer:
             return
         elif results.solver.termination_condition == TerminationCondition.unbounded:
             self.status = "Infeasible"
-            import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
             return
         else:
             self.status = "Solver Status: {}".format(results.solver.status)
